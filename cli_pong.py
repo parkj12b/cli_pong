@@ -4,6 +4,10 @@ import json
 import urllib3
 import ssl
 from websocket import create_connection
+import sys
+import termios
+import tty
+import select
 
 # from pynput import keyboard
 
@@ -88,14 +92,19 @@ sio = socketio.Client(ssl_verify=False)
 
 is_second_player = False
 
+connected = False
 
 @sio.event(namespace="/api/game")
 def connect():
+    global connected
+    connected = True
     print("Connection established")
 
 
 @sio.event(namespace="/api/game")
 def disconnect():
+    global connected
+    connected = False
     print("Disconnected from server")
 
 
@@ -117,6 +126,101 @@ sio.connect(
     socketio_path="/api/game/socket.io",
     transports="websocket",
 )
+
+def send_keypress(key, pressed):
+    if connected:  # Only emit if connected
+        # print(f"Sending key press: {key} - {pressed}")
+        sio.emit("keyPress", {"key": key, "pressed": pressed, "who": is_second_player}, namespace='/api/game')
+    # else:
+        # print(f"Connection lost! Cannot send keypress: {key} - {pressed}")
+        
+def get_single_char():
+    fd = sys.stdin.fileno()
+    rlist, _, _ = select.select([fd], [], [], 0.05)
+    if rlist:
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        return ch
+    return None
+
+from time import sleep
+import time
+
+class Timer:
+    def __init__(self, duration):
+        self.duration = duration
+        self.time_left = duration
+        self.last_time = time.time()
+        self.expired = False
+
+    def update(self):
+        current_time = time.time()
+        # Update the remaining time based on the elapsed time
+        elapsed_time = current_time - self.last_time
+        self.time_left -= elapsed_time
+        self.last_time = current_time
+
+        # If time_left reaches zero, the timer has expired
+        if self.time_left <= 0:
+            self.expired = True
+            self.time_left = 0
+
+    def reset(self):
+        self.time_left = self.duration
+        self.expired = False
+        self.last_time = time.time()
+
+    def is_expired(self):
+        return self.expired
+    
+
+import curses
+
+def main(stdscr):
+    
+    curses.curs_set(0)
+    stdscr.nodelay(1)
+    stdscr.timeout(100)
+    
+    timer = Timer(0.1)
+    paddle_moving_left = False
+    paddle_moving_right = False
+    
+    while True:
+        key = stdscr.getch()
+        
+        timer.update()
+        
+        if key == ord('a') or key == curses.KEY_LEFT:
+            paddle_moving_left = True
+            paddle_moving_right = False
+            timer.reset()  # Reset the timer when a key is pressed
+        elif key == ord('d') or key == curses.KEY_RIGHT:
+            paddle_moving_right = True
+            paddle_moving_left = False
+            timer.reset()  # Reset the timer when a key is pressed
+        elif key == ord('q') :
+            print("Exiting...")
+            break  # Quit the game loop
+        if paddle_moving_left:
+            send_keypress('A', True)
+        else:
+            send_keypress('A', False)
+        if paddle_moving_right:
+            send_keypress('D', True)
+        else:
+            send_keypress('D', False)
+        if timer.is_expired():
+            paddle_moving_left = False
+            paddle_moving_right = False
+            send_keypress('A', False)
+            send_keypress('D', False)
+        stdscr.refresh()
+        sleep(0.05)
 
 
 # def key_pressed(key, key_state):
@@ -149,13 +253,19 @@ sio.connect(
 
 # with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
 #     listener.join()
-import keyboard  # using module keyboard
+# import keyboard  # using module keyboard
 
-while True:  # making a loop
-    try:  # used try so that if user pressed other than the given key error will not be shown
-        if keyboard.is_pressed("q"):  # if key 'q' is pressed
-            print("You Pressed A Key!")
-            break  # finishing the loop
-    except:
-        break  # if user pressed a key other than the given key the loop will break
-sio.wait()
+# while True:  # making a loop
+#     try:  # used try so that if user pressed other than the given key error will not be shown
+#         if keyboard.is_pressed("q"):  # if key 'q' is pressed
+#             print("You Pressed A Key!")
+#             break  # finishing the loop
+#     except:
+#         break  # if user pressed a key other than the given key the loop will break
+
+if __name__ == "__main__":
+    curses.wrapper(main)
+    
+    
+    
+    sio.wait()
